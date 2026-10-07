@@ -1,27 +1,27 @@
 """Locating and loading NuBench prediction parquet files.
 
-Given a --model/--detector/--feature selection, finds and loads the right
-prediction parquet file from a local directory of already-downloaded
-NuBench files - generalizing the original NuBench_Plots notebooks' own
-`download_files` helper (base URL + per-model filename construction), but
-reading what's already on disk rather than fetching from the network.
-Downloading directly from the network can be layered in later without
-changing `find_prediction_file`/`load_predictions`'s own interface.
+Given a model/detector/feature selection, finds and loads the right
+parquet file from a local directory of already-downloaded NuBench files -
+the same per-model filename construction the original NuBench_Plots
+notebooks' `download_files` helper did, but reading from disk. Fetching
+over the network could be layered in later without changing
+`find_prediction_file`/`load_predictions`' interface.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
+from scipy.special import expit  # numerically stable sigmoid
 
 from nubench.style import MODEL_COLORS
 
 PathLike = Union[str, Path]
 
-# Maps each reconstruction task this package supports to the filename
-# substring NuBench's own prediction files use for it - the `target`
-# argument in the original notebooks' `download_files` helper (e.g.
-# "training_arca_full_direction_test_results.parquet" for "direction").
+# Each task mapped to the filename substring NuBench's own prediction
+# files use for it - the `target` argument in the original notebooks'
+# `download_files` (e.g. "training_arca_full_direction_test_results
+# .parquet" for "direction").
 FEATURE_TARGETS: Dict[str, str] = {
     "energy": "initial_state_energy",
     "direction": "direction",
@@ -30,14 +30,12 @@ FEATURE_TARGETS: Dict[str, str] = {
     "classification": "track",
 }
 
-# The four paper models (see `nubench.style`), used to disambiguate
-# DynEdge's own conventionally-unprefixed files from the others.
+# The four paper models, used to tell DynEdge's conventionally
+# unprefixed files from the others.
 KNOWN_MODELS = list(MODEL_COLORS)
 
-# NuBench's own standard column names per task, for the DataFrame schema
-# real prediction parquet files actually use. `is_track` is not a stored
-# column at all in any of these files - it's always derived the same way
-# (see `add_is_track_column`), restricted to muon-neutrino events.
+# NuBench's own column names per task. `is_track` is never stored in any
+# of these files - it is always derived (see `add_is_track_column`).
 DEFAULT_COLUMNS: Dict[str, Dict[str, str]] = {
     "energy": {
         "truth_col": "initial_state_energy",
@@ -74,35 +72,25 @@ DEFAULT_COLUMNS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# The classifier score column's name isn't consistent across every real
-# download source - e.g. it's "target_pred" in some files and
-# "track_pred" in others, and a single multi-panel call can mix
-# detectors from *different* sources (each with its own convention) in
-# one go - so `normalize_score_column` renames whichever one is present
-# to this single canonical name at load time, once per DataFrame, rather
-# than resolving it once per call and risking applying the wrong name to
-# a detector that uses the other convention.
+# Two column names aren't consistent across download sources: the
+# classifier score is "target_pred" in some files and "track_pred" in
+# others, and the predicted inelasticity is "inelasticity_pred" for
+# DynEdge/ParticleNeT but "visible_inelasticity_pred" for GRIT. A single
+# multi-panel call can mix detectors from different sources, so the
+# renaming happens once per DataFrame at load time rather than once per
+# call - otherwise one detector gets the other's name applied.
 CANONICAL_SCORE_COLUMN = "target_pred"
 SCORE_COLUMN_CANDIDATES = ["target_pred", "track_pred"]
+CANONICAL_INELASTICITY_PRED_COLUMN = "inelasticity_pred"
+INELASTICITY_PRED_COLUMN_CANDIDATES = [
+    "inelasticity_pred", "visible_inelasticity_pred",
+]
 
 
 def resolve_column(df: pd.DataFrame, candidates: List[str]) -> str:
-    """Return whichever of `candidates` is an actual column of `df`.
+    """The first of `candidates` that is an actual column of `df`.
 
-    Some NuBench column names aren't perfectly consistent across every
-    real download source (see `SCORE_COLUMN_CANDIDATES`). Rather than
-    hardcoding one name, callers that need to tolerate this pass every
-    name they know about, in preference order.
-
-    Args:
-        df: DataFrame to check.
-        candidates: Column names to try, in order of preference.
-
-    Returns:
-        The first name in `candidates` that's an actual column of `df`.
-
-    Raises:
-        KeyError: If none of `candidates` is a column of `df`.
+    Raises KeyError if none is.
     """
     for name in candidates:
         if name in df.columns:
@@ -113,78 +101,44 @@ def resolve_column(df: pd.DataFrame, candidates: List[str]) -> str:
     )
 
 
-def normalize_score_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename whichever classifier-score column is present to one
-    canonical name (`CANONICAL_SCORE_COLUMN`).
-
-    Applied once per DataFrame at load time, so every DataFrame
-    downstream code ever sees already uses the same name - correct even
-    when a single call mixes detectors from different download sources
-    with different conventions (see `SCORE_COLUMN_CANDIDATES`), unlike
-    resolving the name once per call from a single representative
-    DataFrame.
-
-    Args:
-        df: DataFrame containing one of `SCORE_COLUMN_CANDIDATES`.
-
-    Returns:
-        `df`, unchanged if it already uses `CANONICAL_SCORE_COLUMN`,
-        otherwise a copy with the found column renamed to it.
-    """
-    found = resolve_column(df, SCORE_COLUMN_CANDIDATES)
-    if found == CANONICAL_SCORE_COLUMN:
+def _normalize_column(
+    df: pd.DataFrame, candidates: List[str], canonical: str
+) -> pd.DataFrame:
+    """Rename whichever of `candidates` is present to `canonical`."""
+    found = resolve_column(df, candidates)
+    if found == canonical:
         return df
-    return df.rename(columns={found: CANONICAL_SCORE_COLUMN})
+    return df.rename(columns={found: canonical})
 
 
-# Same real-world inconsistency as the classifier score column, just for
-# the predicted inelasticity value: DynEdge's and ParticleNeT's own
-# combined-file downloads use "inelasticity_pred", but GRIT's use
-# "visible_inelasticity_pred" instead - found by exercising a real
-# multi-model, multi-detector comparison (DynEdge/ParticleNeT/GRIT/
-# DeepIce together), which a single-model check never surfaces.
-CANONICAL_INELASTICITY_PRED_COLUMN = "inelasticity_pred"
-INELASTICITY_PRED_COLUMN_CANDIDATES = [
-    "inelasticity_pred", "visible_inelasticity_pred",
-]
+def normalize_score_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Canonicalize the classifier score's column name *and* its scale.
+
+    Some files store a raw logit instead of a probability (e.g NuBench's own
+    arca/GRIT track file). Applying the sigmoid to those is necessary.
+
+    For example the track-score histogram's bins span the combined
+    range across models, so one logit-valued model would otherwise
+    stretch the axis and squash every other model into a sliver.
+    """
+    df = _normalize_column(
+        df, SCORE_COLUMN_CANDIDATES, CANONICAL_SCORE_COLUMN
+    )
+    scores = df[CANONICAL_SCORE_COLUMN]
+    if scores.max() > 1.0:
+        # `assign` returns a new frame sharing the untouched columns,
+        # so the caller's DataFrame is never mutated.
+        df = df.assign(**{CANONICAL_SCORE_COLUMN: expit(scores)})
+    return df
 
 
 def normalize_inelasticity_pred_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename whichever predicted-inelasticity column is present to one
-    canonical name (`CANONICAL_INELASTICITY_PRED_COLUMN`).
-
-    Same reasoning as `normalize_score_column`: applied once per
-    DataFrame at load time (not once per call from a single
-    representative DataFrame), so a call mixing models with different
-    conventions - e.g. DynEdge and GRIT together - still works.
-
-    Args:
-        df: DataFrame containing one of
-            `INELASTICITY_PRED_COLUMN_CANDIDATES`.
-
-    Returns:
-        `df`, unchanged if it already uses
-        `CANONICAL_INELASTICITY_PRED_COLUMN`, otherwise a copy with the
-        found column renamed to it.
-    """
-    found = resolve_column(df, INELASTICITY_PRED_COLUMN_CANDIDATES)
-    if found == CANONICAL_INELASTICITY_PRED_COLUMN:
-        return df
-    return df.rename(columns={found: CANONICAL_INELASTICITY_PRED_COLUMN})
-
-
-# Every feature except inelasticity needs the derived track/cascade (CC/
-# NC) column, either to split by topology (energy/direction/vertex) or as
-# the classifier's own truth label (classification).
-FEATURES_NEEDING_IS_TRACK = {"energy", "direction", "vertex", "classification"}
-
-# inelasticity doesn't split by topology - it needs the data *filtered*
-# down to track/CC events instead. The original NuBench_Plots notebooks'
-# own `plot_inelasticity_vs_energy`/`plot_inelasticity_dist` both apply
-# this same restriction before computing anything at all: inelasticity
-# for NC/non-muon events follows different physics and would otherwise
-# dominate the residual with events the paper's own plots never include.
-FEATURES_NEEDING_TRACK_ONLY_FILTER = {"inelasticity"}
+    """Rename the predicted-inelasticity column to its canonical name."""
+    return _normalize_column(
+        df,
+        INELASTICITY_PRED_COLUMN_CANDIDATES,
+        CANONICAL_INELASTICITY_PRED_COLUMN,
+    )
 
 
 def _is_track(df: pd.DataFrame) -> pd.Series:
@@ -196,17 +150,10 @@ def add_is_track_column(
 ) -> pd.DataFrame:
     """Add the standard track/cascade (CC/NC) selection column.
 
-    NuBench prediction files never store this directly - every task's
-    `*_by_topology` split, and classification's own truth label, use the
-    same muon-neutrino-restricted convention instead:
+    NuBench files never store this. Every task's `*_by_topology` split,
+    and classification's truth label, use the same muon-neutrino
+    restricted convention:
     `(interaction == 1) & (initial_state_type.abs() == 14)`.
-
-    Args:
-        df: DataFrame containing `interaction` and `initial_state_type`.
-        column: Name for the new boolean column.
-
-    Returns:
-        A copy of `df` with `column` added.
     """
     df = df.copy()
     df[column] = _is_track(df)
@@ -216,44 +163,38 @@ def add_is_track_column(
 def filter_to_track_events(df: pd.DataFrame) -> pd.DataFrame:
     """Restrict to muon-neutrino CC ("track") events.
 
-    Same convention as `add_is_track_column`, but returning the
-    restricted subset itself rather than a boolean column - what
-    inelasticity's own plots need (see `FEATURES_NEEDING_TRACK_ONLY_
-    FILTER`).
-
-    Args:
-        df: DataFrame containing `interaction` and `initial_state_type`.
-
-    Returns:
-        The subset of `df` where
-        `(interaction == 1) & (initial_state_type.abs() == 14)`.
+    Same convention as `add_is_track_column`, returning the subset rather
+    than a column - what inelasticity's plots need.
     """
     return df[_is_track(df)]
 
 
+# What each feature needs doing to a freshly loaded DataFrame, in order.
+# Every feature but inelasticity wants the derived track/cascade column,
+# to split by topology or as the classifier's truth label. Inelasticity
+# instead wants the data *filtered* to track/CC events via the function
+# `filter_to_track_events`: NC and non-muon events follow
+# different physics and would otherwise dominate the residual.
+FEATURE_PREPARATION: Dict[str, List[Callable[[pd.DataFrame], pd.DataFrame]]]
+FEATURE_PREPARATION = {
+    "energy": [add_is_track_column],
+    "direction": [add_is_track_column],
+    "vertex": [add_is_track_column],
+    "classification": [add_is_track_column, normalize_score_column],
+    "inelasticity": [
+        filter_to_track_events,
+        normalize_inelasticity_pred_column,
+    ],
+}
+
+
 def find_dataset_dir(root: PathLike, detector: str) -> Path:
-    """Locate the directory holding one detector's downloaded files.
+    """The subdirectory of `root` holding one detector's files.
 
-    Args:
-        root: Directory containing one subdirectory per detector (e.g.
-            the local `Dataset/` folder these files were downloaded
-            into).
-        detector: Detector key to look for, matched as a case-
-            insensitive substring of the subdirectory name (e.g. "arca"
-            matches a directory named "nubench_arca_dynedge") - a
-            substring match rather than an exact naming convention,
-            since different downloads may name these directories
-            differently.
-
-    Returns:
-        The single matching subdirectory.
-
-    Raises:
-        FileNotFoundError: If no subdirectory matches.
-        ValueError: If more than one subdirectory matches - pass a more
-            specific `detector`, or skip this and call
-            `find_prediction_file`/`load_predictions` directly with the
-            exact directory.
+    `detector` is matched as a case-insensitive substring ("arca" matches
+    "nubench_arca_dynedge") rather than by an exact convention, since
+    different downloads name these differently. Raises FileNotFoundError
+    if nothing matches, ValueError if several do.
     """
     root = Path(root)
     matches = sorted(
@@ -262,8 +203,7 @@ def find_dataset_dir(root: PathLike, detector: str) -> Path:
     )
     if not matches:
         raise FileNotFoundError(
-            f"No directory matching detector={detector!r} found under "
-            f"{root}"
+            f"No directory matching detector={detector!r} found under {root}"
         )
     if len(matches) > 1:
         raise ValueError(
@@ -279,41 +219,20 @@ def find_prediction_file(
     feature: str,
     model: Optional[str] = None,
 ) -> Path:
-    """Locate one model's prediction parquet file for one task.
+    """The parquet file holding one model's predictions for one task.
 
-    Two real file layouts exist and are both supported: NuBench's
-    per-feature layout (one parquet file per task, matched by the
-    `feature`/`target` filename substring below - e.g. the files this
-    project's own local test data uses), and the combined-file layout
-    the paper's own "Predictions" downloads actually give you (one
-    parquet per *model*, holding every task's columns together, with no
-    per-feature filename distinction at all). If no file matches the
-    per-feature substring, every parquet file in `dataset_dir` becomes a
-    candidate instead - correct either way, since a combined file
-    already contains whichever columns `feature` needs.
+    Both real layouts work. NuBench's per-feature layout has one file per
+    task, matched by the `FEATURE_TARGETS` filename substring. The
+    paper's own "Predictions" downloads instead give one file per
+    *model*, holding every task's columns with no per-feature name - so
+    when no filename matches the substring, every parquet file becomes a
+    candidate, which is correct either way.
 
-    Args:
-        dataset_dir: Directory holding one detector's downloaded
-            prediction files (see `find_dataset_dir`).
-        feature: One of the five reconstruction tasks this package
-            supports - a key of `FEATURE_TARGETS`.
-        model: Model name to disambiguate by, e.g. "DynEdge" - matched
-            as a case-insensitive substring of the filename, except for
-            "DynEdge" itself in the per-feature layout: those files
-            conventionally omit any model name at all for DynEdge
-            (following the original notebooks' own download-naming
-            quirk), so "belongs to DynEdge" there means "doesn't look
-            like it belongs to one of the other known models" rather
-            than a literal name match. If None, every candidate file is
-            eligible - fine as long as exactly one exists.
-
-    Returns:
-        The single matching parquet file.
-
-    Raises:
-        ValueError: If `feature` isn't recognized, or more than one file
-            matches (pass `model` to disambiguate).
-        FileNotFoundError: If no file matches.
+    `model` is matched as a case-insensitive substring, except for
+    "DynEdge" in the per-feature layout: those files omit the model name
+    entirely, so "DynEdge's" there means "doesn't look like any other
+    known model's". Raises ValueError on an unknown feature or an
+    ambiguous match, FileNotFoundError if nothing matches.
     """
     if feature not in FEATURE_TARGETS:
         raise ValueError(
@@ -321,45 +240,39 @@ def find_prediction_file(
             f"{sorted(FEATURE_TARGETS)}"
         )
     dataset_dir = Path(dataset_dir)
-    target = FEATURE_TARGETS[feature]
-    candidates = sorted(dataset_dir.glob(f"*{target}*.parquet"))
-    if not candidates:
-        # No per-feature file matched - fall back to the combined-file
-        # layout, where every parquet file is a candidate (one per
-        # model, each holding every task's columns).
-        candidates = sorted(dataset_dir.glob("*.parquet"))
+    candidates = sorted(
+        dataset_dir.glob(f"*{FEATURE_TARGETS[feature]}*.parquet")
+    ) or sorted(dataset_dir.glob("*.parquet"))
     if model is not None:
-        if model == "DynEdge":
-            other_models = [m for m in KNOWN_MODELS if m != "DynEdge"]
+        filtered = [p for p in candidates if model.lower() in p.name.lower()]
+        if not filtered and model == "DynEdge":
+            # NuBench's per-feature downloads (arca, orca) omit the model
+            # name for DynEdge alone, so fall back to elimination - but
+            # only once nothing names DynEdge outright. This rule claims
+            # *any* unprefixed file, so a model outside `KNOWN_MODELS`
+            # would otherwise be silently returned as DynEdge's. Name
+            # generated files `<Model>_...` and it never has to run.
+            others = [m.lower() for m in KNOWN_MODELS if m != "DynEdge"]
             filtered = [
                 p for p in candidates
-                if not any(
-                    other.lower() in p.name.lower() for other in other_models
-                )
+                if not any(other in p.name.lower() for other in others)
             ]
-        else:
-            filtered = [
-                p for p in candidates if model.lower() in p.name.lower()
-            ]
-        # Fall back to the unfiltered candidates if the model filter
-        # leaves nothing - better to surface an unambiguous single match
-        # (or a clear "multiple candidates" error below) than to hide a
-        # file that simply doesn't follow the expected naming quirk.
-        if filtered:
-            candidates = filtered
+        # Keep the unfiltered candidates if the filter leaves nothing:
+        # better to surface a single unambiguous match (or the clear
+        # error below) than to hide a file that just doesn't follow the
+        # expected naming quirk.
+        candidates = filtered or candidates
+    model_part = f", model={model!r}" if model else ""
     if not candidates:
-        model_part = f", model={model!r}" if model else ""
         raise FileNotFoundError(
             f"No prediction file found for feature={feature!r}{model_part} "
             f"in {dataset_dir}"
         )
     if len(candidates) > 1:
-        model_part = f", model={model!r}" if model else ""
         raise ValueError(
             f"Multiple candidate files found for feature={feature!r}"
             f"{model_part} in {dataset_dir}: "
-            f"{[p.name for p in candidates]} - pass `model` to "
-            "disambiguate."
+            f"{[p.name for p in candidates]} - pass `model` to disambiguate."
         )
     return candidates[0]
 
@@ -369,21 +282,29 @@ def load_predictions(
     feature: str,
     model: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Load one model's prediction parquet file for one task.
+    """`find_prediction_file` plus `pandas.read_parquet`."""
+    return pd.read_parquet(
+        find_prediction_file(dataset_dir, feature, model=model)
+    )
 
-    Thin wrapper around `find_prediction_file` + `pandas.read_parquet` -
-    see `find_prediction_file` for how the file is located.
 
-    Args:
-        dataset_dir: Directory holding one detector's downloaded
-            prediction files.
-        feature: One of the five reconstruction tasks this package
-            supports.
-        model: Model name to disambiguate by, if more than one model's
-            files live in `dataset_dir` for the same `feature`.
+def load_feature_predictions(
+    data_root: PathLike,
+    detector: str,
+    feature: str,
+    models: List[str],
+) -> Dict[str, pd.DataFrame]:
+    """One detector's `{model: DataFrame}` predictions for `feature`.
 
-    Returns:
-        The loaded prediction DataFrame.
+    `data_root` holds one subdirectory per detector. Applies whichever
+    derived columns and column-name normalizations `feature` needs, so
+    every DataFrame downstream uses the same schema.
     """
-    path = find_prediction_file(dataset_dir, feature, model=model)
-    return pd.read_parquet(path)
+    dataset_dir = find_dataset_dir(data_root, detector)
+    predictions = {}
+    for model in models:
+        df = load_predictions(dataset_dir, feature, model=model)
+        for prepare in FEATURE_PREPARATION[feature]:
+            df = prepare(df)
+        predictions[model] = df
+    return predictions

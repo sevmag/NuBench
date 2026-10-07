@@ -1,20 +1,11 @@
-"""Task-specific model-evaluation metric functions.
+"""Model-evaluation metrics, one module per reconstruction task.
 
-Each function here knows about one particular reconstruction task (energy,
-direction, vertex, ...) and which residual definition applies to it, but
-still takes DataFrame column names as arguments rather than assuming a
-fixed schema - so the same function works regardless of what a user named
-their prediction/truth columns.
-
-Split one file per task (`energy.py`, `direction.py`, `vertex.py`,
-`inelasticity.py`, `classification.py`) for readability; everything is
-re-exported here so existing call sites
-(`from nubench.evaluation.metrics import energy_calibration`, etc.) keep
-working unchanged.
+Each function takes DataFrame column names as arguments rather than
+assuming a fixed schema, so it works whatever a user named their
+prediction/truth columns.
 """
 
 from nubench.evaluation.metrics.classification import (
-    auc_score,
     roc_curve_data,
     roc_curve_data_by_energy_regime,
     track_score_distribution_by_topology,
@@ -25,10 +16,7 @@ from nubench.evaluation.metrics.direction import (
     direction_resolution,
     direction_resolution_by_topology,
 )
-from nubench.evaluation.metrics.energy import (
-    energy_calibration,
-    energy_calibration_by_topology,
-)
+from nubench.evaluation.metrics.energy import energy_calibration
 from nubench.evaluation.metrics.inelasticity import (
     inelasticity_distribution_by_energy_regime,
     inelasticity_resolution,
@@ -40,7 +28,6 @@ from nubench.evaluation.metrics.vertex import (
 )
 
 __all__ = [
-    "auc_score",
     "roc_curve_data",
     "roc_curve_data_by_energy_regime",
     "track_score_distribution_by_topology",
@@ -49,7 +36,6 @@ __all__ = [
     "direction_resolution",
     "direction_resolution_by_topology",
     "energy_calibration",
-    "energy_calibration_by_topology",
     "inelasticity_distribution_by_energy_regime",
     "inelasticity_resolution",
     "vertex_contour_by_topology",

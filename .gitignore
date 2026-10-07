@@ -8,3 +8,4 @@ dist/
 *.parquet
 .DS_Store
 .vscode/
+tests/

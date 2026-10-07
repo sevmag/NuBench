@@ -12,17 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from nubench.data import (
-    DEFAULT_COLUMNS,
-    FEATURES_NEEDING_IS_TRACK,
-    FEATURES_NEEDING_TRACK_ONLY_FILTER,
-    add_is_track_column,
-    filter_to_track_events,
-    find_dataset_dir,
-    load_predictions,
-    normalize_inelasticity_pred_column,
-    normalize_score_column,
-)
+from nubench.data import DEFAULT_COLUMNS, load_feature_predictions
 from nubench.evaluation.plotting import (
     plot_direction_figure,
     plot_energy_calibration_by_topology_figure,
@@ -40,65 +30,17 @@ from nubench.multipanel import (
 FEATURES = sorted(DEFAULT_COLUMNS)
 
 
-def load_feature_predictions(
-    data_root: str,
-    detector: str,
-    feature: str,
-    models: List[str],
-) -> Dict[str, pd.DataFrame]:
-    """Load one DataFrame per model for a given detector/feature selection.
-
-    Args:
-        data_root: Directory containing one subdirectory per detector
-            (see `nubench.data.find_dataset_dir`).
-        detector: Detector key, e.g. "arca".
-        feature: One of `FEATURES`.
-        models: Model names to load, e.g. `["DynEdge", "ParticleNeT"]`.
-            Each becomes one entry (and one legend label) in the
-            returned dict.
-
-    Returns:
-        Mapping from model name to its loaded prediction DataFrame, with
-        the derived `is_track` column already added, or the DataFrame
-        already filtered down to track/CC events, where the plot for
-        `feature` needs it.
-    """
-    dataset_dir = find_dataset_dir(data_root, detector)
-    predictions = {}
-    for model in models:
-        df = load_predictions(dataset_dir, feature, model=model)
-        if feature in FEATURES_NEEDING_IS_TRACK:
-            df = add_is_track_column(df)
-        if feature in FEATURES_NEEDING_TRACK_ONLY_FILTER:
-            df = filter_to_track_events(df)
-        if feature == "classification":
-            df = normalize_score_column(df)
-        if feature == "inelasticity":
-            df = normalize_inelasticity_pred_column(df)
-        predictions[model] = df
-    return predictions
-
-
 def make_figure(
     feature: str, predictions: Dict[str, pd.DataFrame]
 ) -> plt.Figure:
-    """Build the default figure for one feature from its predictions.
+    """The default figure for one feature.
 
-    Picks one representative, ready-to-share plot per task - the
-    combined CC/NC or resolution+distribution figure where one exists
+    One representative plot per task: the combined CC/NC or
+    resolution+distribution figure where one exists
     (energy/direction/inelasticity), otherwise the single most broadly
-    useful comparison plot (vertex/classification). Every column name
-    comes from `nubench.data.DEFAULT_COLUMNS`, matching NuBench's own
-    real-file schema - use the plotting functions directly (see
-    `nubench.evaluation.plotting`) for anything more custom.
-
-    Args:
-        feature: One of `FEATURES`.
-        predictions: Mapping from model name to its prediction
-            DataFrame, as returned by `load_feature_predictions`.
-
-    Returns:
-        The Figure ready to save.
+    useful comparison plot (verte x/classification). Column names come
+    from `DEFAULT_COLUMNS`; call the plotting functions directly for
+    anything more custom.
     """
     if feature not in DEFAULT_COLUMNS:
         raise ValueError(
@@ -126,11 +68,10 @@ def make_figure(
             muon_zenith_col=columns["muon_zenith_col"],
             muon_azimuth_col=columns["muon_azimuth_col"],
             # The right panel's auto-built bins span the *combined*
-            # opening-angle range, which is far wider than the ~0-10 deg.
+            # opening-angle range, which is far wider than the ~0-5 deg.
             # window the panel actually displays - without this, the
             # curve gets clipped down to a handful of very coarse bins.
-            # This zoomed-in range is the paper-matching default.
-            distribution_bins=np.linspace(0, 10, 120),
+            distribution_bins=np.linspace(0, 5, 120)
         )
         return fig
     if feature == "vertex":
@@ -145,10 +86,6 @@ def make_figure(
             energy_col=columns["energy_col"],
             is_track_col="is_track",
         )
-        # `Axes.figure` is typed `Figure | SubFigure` since it could in
-        # principle belong to a subfigure - always a plain `Figure` here,
-        # since every Axes this function ever creates comes from
-        # `plt.subplots()`, never from a subfigure.
         return ax.figure  # type: ignore[return-value]
     if feature == "inelasticity":
         fig, _ = plot_inelasticity_figure(
@@ -158,14 +95,12 @@ def make_figure(
             energy_col=columns["energy_col"],
         )
         return fig
-    if feature == "classification":
-        ax = plot_roc_curve_comparison(
-            predictions,
-            truth_col=columns["truth_col"],
-            score_col=columns["score_col"],
-        )
-        return ax.figure  # type: ignore[return-value]
-    raise ValueError(f"Unknown feature {feature!r}; must be one of {FEATURES}")
+    ax = plot_roc_curve_comparison(
+        predictions,
+        truth_col=columns["truth_col"],
+        score_col=columns["score_col"],
+    )
+    return ax.figure  # type: ignore[return-value]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -192,9 +127,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "Detector key, e.g. 'arca' - matched as a substring of the "
-            "dataset subdirectory's name. Repeat --detector (together "
-            "with --multi-panel) to reproduce a multi-detector grid, "
-            "one subplot per detector."
+            "dataset subdirectory's name. Give it once for a "
+            "single-detector figure; to give it more than once you must "
+            "also pass --multi-panel, which puts each detector in its "
+            "own subplot."
         ),
     )
     parser.add_argument(
@@ -218,8 +154,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--multi-panel",
         action="store_true",
         help=(
-            "Reproduce a multi-detector grid (one subplot per "
-            "--detector) instead of a single-detector figure."
+            "Reproduce a multi-detector grid, one subplot per "
+            "--detector, instead of a single-detector figure. Required "
+            "whenever more than one --detector is given."
         ),
     )
     parser.add_argument(
@@ -231,7 +168,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         default=None,
-        help="Output image path. Defaults to '<feature>.png'.",
+        help=(
+            "Output image path. Defaults to '<feature>.png'. The suffix "
+            "picks the format - use '.pdf' for vector output, which is "
+            "what a paper wants."
+        ),
     )
     return parser
 
@@ -258,7 +199,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         fig = make_figure(args.feature, predictions)
     output = args.output or f"{args.feature}.png"
-    fig.savefig(output, dpi=150)
+    fig.savefig(output, dpi=300)
     print(f"saved {output}")
 
 

@@ -1,14 +1,7 @@
-"""Plotting functions for visualizing model-evaluation metrics.
+"""Plots of model-evaluation metrics, one module per reconstruction task.
 
-These functions take the DataFrames produced by `nubench.evaluation.metrics`
-functions (not raw prediction DataFrames) and turn them into matplotlib
-figures.
-
-Split one file per task (`energy.py`, `direction.py`, `vertex.py`,
-`inelasticity.py`, `classification.py`), plus `multi_panel.py` for the one
-task-agnostic wrapper; everything is re-exported here so existing call
-sites (`from nubench.evaluation.plotting import plot_energy_calibration`,
-etc.) keep working unchanged.
+These take the DataFrames produced by `nubench.evaluation.metrics`, not
+raw prediction DataFrames.
 """
 
 from nubench.evaluation.plotting.classification import (
@@ -39,12 +32,12 @@ from nubench.evaluation.plotting.inelasticity import (
     plot_inelasticity_resolution,
     plot_inelasticity_resolution_comparison,
 )
-from nubench.evaluation.plotting.multi_panel import plot_multi_panel
 from nubench.evaluation.plotting.vertex import (
     plot_vertex_contour_by_topology,
     plot_vertex_contour_by_topology_comparison,
     plot_vertex_resolution_by_topology,
     plot_vertex_resolution_by_topology_comparison,
+    vertex_contour_axis_ranges,
 )
 
 __all__ = [
@@ -68,9 +61,9 @@ __all__ = [
     "plot_inelasticity_figure",
     "plot_inelasticity_resolution",
     "plot_inelasticity_resolution_comparison",
-    "plot_multi_panel",
     "plot_vertex_contour_by_topology",
     "plot_vertex_contour_by_topology_comparison",
     "plot_vertex_resolution_by_topology",
     "plot_vertex_resolution_by_topology_comparison",
+    "vertex_contour_axis_ranges",
 ]
