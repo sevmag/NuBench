@@ -729,35 +729,68 @@ def plot_vertex_contour_multi_detector_figure(
     )
 
 
+# Which feature's data each figure needs. Mostly one figure per
+# feature, but vertex and classification each have a second paper
+# figure drawn from the same columns, which is why figure and feature
+# are not the same thing.
+FIGURE_FEATURE: Dict[str, str] = {
+    "energy": "energy",
+    "direction": "direction",
+    "inelasticity": "inelasticity",
+    "vertex": "vertex",
+    "vertex-contour": "vertex",
+    "classification": "classification",
+    "track-score": "classification",
+}
+
+
 def make_multi_panel_figure(
     feature: str,
     predictions_by_dataset: Dict[str, Dict[str, pd.DataFrame]],
     ncols: int = 4,
+    figure: Optional[str] = None,
 ) -> plt.Figure:
-    """The paper's multi-detector grid for one feature.
+    """The paper's multi-detector grid for one figure.
 
-    Energy, direction and inelasticity get the paired-panel layout;
-    vertex and classification get one representative panel per detector
-    (resolution-vs-energy, and the energy-regime-split ROC). The paper's
-    other two single-panel figures - track score and vertex contour -
-    have no feature key of their own; call
-    `plot_track_score_multi_detector_figure` or
-    `plot_vertex_contour_multi_detector_figure` directly.
+    `figure` defaults to `feature`, which covers the five figures named
+    after their feature. Pass "vertex-contour" or "track-score" for the
+    paper's other two, which use the same loaded data as "vertex" and
+    "classification" respectively.
     """
-    if feature not in DEFAULT_COLUMNS:
+    figure = figure or feature
+    if figure not in FIGURE_FEATURE:
         raise ValueError(
-            f"Unknown feature {feature!r}; must be one of "
-            f"{sorted(DEFAULT_COLUMNS)}"
+            f"Unknown figure {figure!r}; must be one of "
+            f"{sorted(FIGURE_FEATURE)}"
         )
-    columns = DEFAULT_COLUMNS[feature]
-    if feature == "energy":
+    columns = DEFAULT_COLUMNS[FIGURE_FEATURE[figure]]
+    if figure == "vertex-contour":
+        return plot_vertex_contour_multi_detector_figure(
+            predictions_by_dataset,
+            truth_x_col=columns["truth_x_col"],
+            truth_y_col=columns["truth_y_col"],
+            truth_z_col=columns["truth_z_col"],
+            pred_x_col=columns["pred_x_col"],
+            pred_y_col=columns["pred_y_col"],
+            pred_z_col=columns["pred_z_col"],
+            is_track_col="is_track",
+            ncols=ncols,
+        )
+    if figure == "track-score":
+        return plot_track_score_multi_detector_figure(
+            predictions_by_dataset,
+            score_col=columns["score_col"],
+            is_track_col="is_track",
+            ncols=ncols,
+        )
+    if figure == "energy":
         return plot_energy_multi_detector_figure(
             predictions_by_dataset,
             truth_col=columns["truth_col"],
             pred_col=columns["pred_col"],
             ncols=ncols,
         )
-    if feature == "direction":
+    if figure == "direction":
         return plot_direction_multi_detector_figure(
             predictions_by_dataset,
             truth_zenith_col=columns["truth_zenith_col"],
@@ -771,7 +804,7 @@ def make_multi_panel_figure(
             ncols=ncols,
             distribution_bins=np.linspace(0, 5, 120),
         )
-    if feature == "vertex":
+    if figure == "vertex":
         return plot_vertex_resolution_multi_detector_figure(
             predictions_by_dataset,
             truth_x_col=columns["truth_x_col"],
@@ -784,7 +817,7 @@ def make_multi_panel_figure(
             is_track_col="is_track",
             ncols=ncols,
         )
-    if feature == "inelasticity":
+    if figure == "inelasticity":
         return plot_inelasticity_multi_detector_figure(
             predictions_by_dataset,
             truth_col=columns["truth_col"],

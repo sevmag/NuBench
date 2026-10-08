@@ -18,9 +18,12 @@ from nubench.evaluation.plotting import (
     plot_energy_calibration_by_topology_figure,
     plot_inelasticity_figure,
     plot_roc_curve_comparison,
+    plot_track_score_distribution_by_topology_comparison,
+    plot_vertex_contour_by_topology_comparison,
     plot_vertex_resolution_by_topology_comparison,
 )
 from nubench.multipanel import (
+    FIGURE_FEATURE,
     load_multi_panel_predictions,
     make_multi_panel_figure,
 )
@@ -28,10 +31,15 @@ from nubench.multipanel import (
 # Every feature this CLI can plot - the keys of `DEFAULT_COLUMNS`, which
 # also defines the real-file column names each one needs.
 FEATURES = sorted(DEFAULT_COLUMNS)
+# Every figure, including the two drawn from a feature whose name they
+# do not share (see `FIGURE_FEATURE`).
+FIGURES = sorted(FIGURE_FEATURE)
 
 
 def make_figure(
-    feature: str, predictions: Dict[str, pd.DataFrame]
+    feature: str,
+    predictions: Dict[str, pd.DataFrame],
+    figure: Optional[str] = None,
 ) -> plt.Figure:
     """The default figure for one feature.
 
@@ -42,12 +50,32 @@ def make_figure(
     from `DEFAULT_COLUMNS`; call the plotting functions directly for
     anything more custom.
     """
-    if feature not in DEFAULT_COLUMNS:
+    figure = figure or feature
+    if figure not in FIGURE_FEATURE:
         raise ValueError(
-            f"Unknown feature {feature!r}; must be one of {FEATURES}"
+            f"Unknown figure {figure!r}; must be one of {FIGURES}"
         )
-    columns = DEFAULT_COLUMNS[feature]
-    if feature == "energy":
+    columns = DEFAULT_COLUMNS[FIGURE_FEATURE[figure]]
+    if figure == "vertex-contour":
+        ax = plot_vertex_contour_by_topology_comparison(
+            predictions,
+            truth_x_col=columns["truth_x_col"],
+            truth_y_col=columns["truth_y_col"],
+            truth_z_col=columns["truth_z_col"],
+            pred_x_col=columns["pred_x_col"],
+            pred_y_col=columns["pred_y_col"],
+            pred_z_col=columns["pred_z_col"],
+            is_track_col="is_track",
+        )
+        return ax.figure  # type: ignore[return-value]
+    if figure == "track-score":
+        ax = plot_track_score_distribution_by_topology_comparison(
+            predictions,
+            score_col=columns["score_col"],
+            is_track_col="is_track",
+        )
+        return ax.figure  # type: ignore[return-value]
+    if figure == "energy":
         fig, _ = plot_energy_calibration_by_topology_figure(
             predictions,
             truth_col=columns["truth_col"],
@@ -55,7 +83,7 @@ def make_figure(
             is_track_col="is_track",
         )
         return fig
-    if feature == "direction":
+    if figure == "direction":
         fig, _ = plot_direction_figure(
             predictions,
             truth_zenith_col=columns["truth_zenith_col"],
@@ -74,7 +102,7 @@ def make_figure(
             distribution_bins=np.linspace(0, 5, 120)
         )
         return fig
-    if feature == "vertex":
+    if figure == "vertex":
         ax = plot_vertex_resolution_by_topology_comparison(
             predictions,
             truth_x_col=columns["truth_x_col"],
@@ -87,7 +115,7 @@ def make_figure(
             is_track_col="is_track",
         )
         return ax.figure  # type: ignore[return-value]
-    if feature == "inelasticity":
+    if figure == "inelasticity":
         fig, _ = plot_inelasticity_figure(
             predictions,
             truth_col=columns["truth_col"],
@@ -151,6 +179,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--figure",
+        default=None,
+        choices=FIGURES,
+        help=(
+            "Which figure to draw. Defaults to --feature, which names "
+            "five of the seven. Use 'vertex-contour' or 'track-score' "
+            "for the paper's other two; they reuse the data loaded for "
+            "--feature vertex and --feature classification."
+        ),
+    )
+    parser.add_argument(
         "--multi-panel",
         action="store_true",
         help=(
@@ -181,12 +220,20 @@ def main(argv: Optional[List[str]] = None) -> None:
     """CLI entry point: parse arguments, build the figure, save it."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    # --figure draws from the data --feature loads, so the two have to
+    # agree; otherwise the figure fails later on a missing column.
+    if args.figure and FIGURE_FEATURE[args.figure] != args.feature:
+        parser.error(
+            f"--figure {args.figure} needs --feature "
+            f"{FIGURE_FEATURE[args.figure]}, not {args.feature}"
+        )
     if args.multi_panel:
         predictions_by_dataset = load_multi_panel_predictions(
             args.data_root, args.detectors, args.feature, args.models
         )
         fig = make_multi_panel_figure(
-            args.feature, predictions_by_dataset, ncols=args.ncols
+            args.feature, predictions_by_dataset, ncols=args.ncols,
+            figure=args.figure,
         )
     else:
         if len(args.detectors) != 1:
@@ -197,8 +244,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         predictions = load_feature_predictions(
             args.data_root, args.detectors[0], args.feature, args.models
         )
-        fig = make_figure(args.feature, predictions)
-    output = args.output or f"{args.feature}.png"
+        fig = make_figure(args.feature, predictions, figure=args.figure)
+    output = args.output or f"{args.figure or args.feature}.png"
     fig.savefig(output, dpi=300)
     print(f"saved {output}")
 
