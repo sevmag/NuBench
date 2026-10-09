@@ -257,11 +257,9 @@ def find_prediction_file(
                 p for p in candidates
                 if not any(other in p.name.lower() for other in others)
             ]
-        # Keep the unfiltered candidates if the filter leaves nothing:
-        # better to surface a single unambiguous match (or the clear
-        # error below) than to hide a file that just doesn't follow the
-        # expected naming quirk.
-        candidates = filtered or candidates
+        # No fallback to the unfiltered list: with one file left, that
+        # would hand back another model's predictions under this name.
+        candidates = filtered
     model_part = f", model={model!r}" if model else ""
     if not candidates:
         raise FileNotFoundError(

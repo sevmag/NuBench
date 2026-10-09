@@ -393,13 +393,30 @@ def load_multi_panel_predictions(
     feature: str,
     models: List[str],
 ) -> Dict[str, Dict[str, pd.DataFrame]]:
-    """Every detector's `{model: DataFrame}` predictions for `feature`."""
-    return {
-        detector: load_feature_predictions(
-            data_root, detector, feature, models
-        )
-        for detector in detectors
-    }
+    """Every detector's `{model: DataFrame}` predictions for `feature`.
+
+    Not every model was trained on every detector (no GRIT for ORCA), so
+    a model a detector lacks is left out of that panel with a note.
+    Raises FileNotFoundError if a detector has none of `models`.
+    """
+    predictions_by_dataset = {}
+    for detector in detectors:
+        predictions: Dict[str, pd.DataFrame] = {}
+        for model in models:
+            try:
+                predictions.update(
+                    load_feature_predictions(
+                        data_root, detector, feature, [model]
+                    )
+                )
+            except FileNotFoundError:
+                print(f"note: no {feature} file for {model} on {detector}")
+        if not predictions:
+            raise FileNotFoundError(
+                f"None of {models} has a {feature} file for {detector}"
+            )
+        predictions_by_dataset[detector] = predictions
+    return predictions_by_dataset
 
 
 def plot_energy_multi_detector_figure(
