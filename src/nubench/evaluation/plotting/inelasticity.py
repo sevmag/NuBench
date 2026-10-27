@@ -6,6 +6,7 @@ two side by side.
 from typing import Dict, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -75,24 +76,30 @@ def plot_inelasticity_distribution_by_energy_regime(
     ax: Optional[plt.Axes] = None,
     label: Optional[str] = None,
     color: Optional[str] = None,
+    include_truth: bool = True,
 ) -> plt.Axes:
     """Plot one model's inelasticity distribution as step histograms.
 
     High energy solid, low energy dashed, as the paper's own notebook
     draws it. Note its published caption says the reverse - the figure
     and the code agree with each other, the caption is the odd one out.
-    Truth is black, being a fixed reference rather than a prediction.
+    Truth is black, being a fixed reference rather than a prediction;
+    `include_truth=False` skips it when another model already drew it.
     """
     if ax is None:
         fig, ax = plt.subplots()
-    for key, linestyle, line_label in (
+    lines = [
         ("high_energy_pred", "-",
          f"{label} (high energy)" if label is not None else None),
         ("low_energy_pred", "--",
          f"{label} (low energy)" if label is not None else None),
-        ("high_energy_truth", "-", "truth (high energy)"),
-        ("low_energy_truth", "--", "truth (low energy)"),
-    ):
+    ]
+    if include_truth:
+        lines += [
+            ("high_energy_truth", "-", "truth (high energy)"),
+            ("low_energy_truth", "--", "truth (low energy)"),
+        ]
+    for key, linestyle, line_label in lines:
         ax.step(
             result[key]["bin_left"], result[key]["percentage"], where="post",
             color="black" if key.endswith("truth") else color,
@@ -114,6 +121,10 @@ def plot_inelasticity_distribution_by_energy_regime_comparison(
     ax: Optional[plt.Axes] = None,
 ) -> plt.Axes:
     """Overlay every model's inelasticity distribution, plus black truth.
+
+    Truth is drawn once, from the first model's DataFrame: every model is
+    evaluated on the same test events. The legend names each model once
+    and spells out the two linestyles, rather than listing every line.
     """
     if bins is None:
         bins = np.linspace(
@@ -129,15 +140,25 @@ def plot_inelasticity_distribution_by_energy_regime_comparison(
         )
     if ax is None:
         fig, ax = plt.subplots()
-    for model_name, df in predictions.items():
+    for i, (model_name, df) in enumerate(predictions.items()):
         plot_inelasticity_distribution_by_energy_regime(
             inelasticity_distribution_by_energy_regime(
                 df, pred_col, truth_col, energy_col,
                 energy_threshold=energy_threshold, bins=bins,
             ),
             ax=ax, label=model_name, color=model_color(model_name),
+            include_truth=i == 0,
         )
-    ax.legend()
+    handles = [
+        Line2D([], [], color=model_color(name), label=name)
+        for name in predictions
+    ] + [
+        Line2D([], [], color="black", label="Truth"),
+        Line2D([], [], color="grey", label=f"E > {energy_threshold:g} GeV"),
+        Line2D([], [], color="grey", linestyle="--",
+               label=f"E <= {energy_threshold:g} GeV"),
+    ]
+    ax.legend(handles=handles, fontsize="small")
     return ax
 
 
