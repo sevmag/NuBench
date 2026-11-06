@@ -1,6 +1,6 @@
 # NuBench
 
-This repository provides access to datasets, model predictions, and model artifacts for the NuBench dataset catalogue presented in [NuBench: An Open Benchmark for Deep Learning–Based Event Reconstruction in Neutrino Telescopes](https://arxiv.org/pdf/2511.13111). Datasets are available in two formats (SQLite and Parquet) - users may choose their preferred format. 
+This repository provides access to datasets, model predictions, and model artifacts for the NuBench dataset catalogue presented in [NuBench: An Open Benchmark for Deep Learning–Based Event Reconstruction in Neutrino Telescopes](https://arxiv.org/pdf/2511.13111). Datasets are available in two formats (SQLite and Parquet) - users may choose their preferred format.
 
 ---
 ![alt](./figures/geometry_birdseye.png "Birds Eye View of Geometries")
@@ -40,7 +40,88 @@ The contents of predictions and Parquet downloads should be extracted using
 
 `tar -xf filename.tar.gz`
 
-## Citation 
+## Plotting
+The `nubench` package reproduces the paper's figures from prediction files, for any combination of detectors, models and tasks.
+### Install
+
+```bash
+pip install -e .
+```
+
+Run inside the repository folder. This also installs the `nubench-plot` command.
+
+### Folder layout
+`--data-root` is a folder containing one subfolder per detector, each holding
+that detector's prediction files (`.parquet`):
+
+```
+<data-root>/
+├── <folder containing the detector key>/
+│   ├── <prediction files>.parquet
+│   └── ...
+└── ...
+```
+
+`--detector` selects a subfolder by a case-insensitive part of its name, and
+must match exactly one subfolder. For example, with the NuBench prediction
+downloads:
+
+```
+Dataset/                        <- --data-root Dataset
+├── nubench_arca_dynedge/       <- --detector arca
+└── nubench_orca_dynedge/       <- --detector orca
+```
+
+The paper's detector keys are labelled with their display names in
+multi-panel figures:
+
+| key | detector |
+|---|---|
+| `arca` | Flower L |
+| `orca` | Flower S |
+| `trident` | Flower XL |
+| `icecube_water` | Hexagon |
+| `icecube_ice` | Hexagon Ice LE |
+| `gvd` | Cluster |
+| `pone` | Triangle |
+
+Within a folder, files are matched by model name (e.g. `GRIT_...`) and by
+task (`initial_state_energy`, `direction`, `position`,
+`visible_inelasticity`, `track`). Files without a model prefix are read as
+DynEdge's, as in the NuBench downloads.
+
+### Example
+
+```bash
+# Several models on one detector
+nubench-plot --data-root Dataset --detector arca --feature energy \
+    --model DynEdge --model GRIT --output energy.pdf
+
+# One panel per detector
+nubench-plot --data-root Dataset --detector arca --detector orca \
+    --feature energy --model DynEdge --multi-panel --output energy_grid.pdf
+```
+
+Model names: `DynEdge`, `ParticleNeT`, `GRIT`, `DeepIce`, written exactly like this.
+
+### Features and figures
+
+`--feature` selects the task: `energy`, `direction`, `inelasticity`,
+`vertex` or `classification`. Each draws its default figure.
+
+Two tasks have a second figure, selected with `--figure` (only needed for
+these):
+
+- `--feature vertex --figure vertex-contour`
+- `--feature classification --figure track-score`
+
+A model can only be plotted for a detector that has prediction files for it.
+In a single-detector figure, a missing model stops with an error. In a
+multi-panel figure, it is skipped for that detector, with a note.
+
+Run `nubench-plot --help` for all options.
+
+## Citation
 
 NuBench - https://arxiv.org/pdf/2511.13111
 Prometheus - https://arxiv.org/pdf/2304.14526
